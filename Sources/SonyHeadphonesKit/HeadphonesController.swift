@@ -55,7 +55,10 @@ public final class HeadphonesController: ObservableObject {
     private var ackTimeoutTask: Task<Void, Never>?
     private var initRetryTask: Task<Void, Never>?
     private var stateTimeoutTask: Task<Void, Never>?
+    private var connectTimeoutTask: Task<Void, Never>?
     private var initRetryCount = 0
+    private var connectRetryCount = 0
+    private var connectTarget: (address: String, name: String?)?
     private var didApplyConnectDefaults = false
 
     public init() {
@@ -88,21 +91,57 @@ public final class HeadphonesController: ObservableObject {
     }
 
     public func connect(toAddress address: String, name: String?) {
+        connectRetryCount = 0
+        connectTarget = (address, name)
+        attemptConnect()
+    }
+
+    private func attemptConnect() {
+        guard let target = connectTarget else { return }
         // Tear down any live channel first; connecting on top of an open RFCOMM
         // channel leaks it and leaves two delegates fighting over one session.
         connection.disconnect()
         resetSessionState()
-        deviceName = name
+        deviceName = target.name
         connectionState = .connecting
         lastError = nil
-        protocolLog.startSession(deviceName: name)
-        connection.connect(toDeviceAddress: address)
+        protocolLog.startSession(deviceName: target.name)
+        connection.connect(toDeviceAddress: target.address)
+        startConnectTimeout()
+    }
+
+    /// Nothing in the connect path (ACL link-up, SDP query, RFCOMM channel open) is
+    /// guaranteed to call back: if the headset is busy talking to a phone, or the link
+    /// is half-torn-down from a previous session, IOBluetooth simply goes quiet. Without
+    /// this the UI spins on "Connecting…" forever. One silent retry covers the common
+    /// stale-link case; after that, say so instead of pretending we're still working.
+    private func startConnectTimeout() {
+        connectTimeoutTask?.cancel()
+        connectTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.handleConnectTimeout()
+        }
+    }
+
+    private func handleConnectTimeout() {
+        guard connectionState == .connecting || connectionState == .initializing else { return }
+        guard connectRetryCount < 1 else {
+            lastError = "The headphones didn\u{2019}t answer. Make sure they\u{2019}re on and connected as an audio device, then try again."
+            connectionState = .failed(lastError ?? "")
+            connection.disconnect()
+            return
+        }
+        connectRetryCount += 1
+        attemptConnect()
     }
 
     public func disconnect() {
         ackTimeoutTask?.cancel()
         initRetryTask?.cancel()
         stateTimeoutTask?.cancel()
+        connectTimeoutTask?.cancel()
+        connectTarget = nil
         connection.disconnect()
         connectionState = .disconnected
     }
@@ -188,6 +227,7 @@ public final class HeadphonesController: ObservableObject {
         ackTimeoutTask?.cancel()
         initRetryTask?.cancel()
         stateTimeoutTask?.cancel()
+        connectTimeoutTask?.cancel()
         initRetryCount = 0
         didApplyConnectDefaults = false
         initialStateTimedOut = false
@@ -298,6 +338,7 @@ public final class HeadphonesController: ObservableObject {
         case .protocolInfo(let version):
             protocolVersion = version
             initRetryTask?.cancel()
+            connectTimeoutTask?.cancel()
             connectionState = .connected
             requestFullState()
             startStateTimeout()

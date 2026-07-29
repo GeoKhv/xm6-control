@@ -29,7 +29,8 @@ public final class RFCOMMConnection: NSObject {
 
     private var device: IOBluetoothDevice?
     private var channel: IOBluetoothRFCOMMChannel?
-    private var didOpen = false
+    /// Guards the one-shot retry when a channel open fails outright.
+    private var didRetryChannelOpen = false
 
     public override init() {
         super.init()
@@ -51,7 +52,13 @@ public final class RFCOMMConnection: NSObject {
     }
 
     private static func device(forAddress address: String) -> IOBluetoothDevice? {
-        IOBluetoothDevice(addressString: address)
+        // Prefer the registry's own object for this address: it carries the paired-device
+        // state, where a freshly constructed one starts blank.
+        if let paired = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice],
+           let match = paired.first(where: { $0.addressString?.caseInsensitiveCompare(address) == .orderedSame }) {
+            return match
+        }
+        return IOBluetoothDevice(addressString: address)
     }
 
     // MARK: - Connect
@@ -63,7 +70,7 @@ public final class RFCOMMConnection: NSObject {
                 return
             }
             self.device = device
-            self.didOpen = false
+            self.didRetryChannelOpen = false
 
             if device.isConnected() {
                 beginServiceDiscovery(on: device)
@@ -79,6 +86,10 @@ public final class RFCOMMConnection: NSObject {
 
     public func disconnect() {
         DispatchQueue.main.async { [self] in
+            // Detach before closing: `close()` is asynchronous, and a channel still tearing
+            // down would otherwise fire `rfcommChannelClosed` after the next connect has
+            // begun, knocking the fresh session straight back to "disconnected".
+            channel?.setDelegate(nil)
             _ = channel?.close()
             channel = nil
             device = nil
@@ -113,11 +124,10 @@ public final class RFCOMMConnection: NSObject {
             return
         }
 
-        guard let v1 = Self.sdpUUID(Self.serviceUUIDv1), let v2 = Self.sdpUUID(Self.serviceUUIDv2) else {
-            onEvent?(.failed("Internal error constructing service UUIDs"))
-            return
-        }
-        let result = device.performSDPQuery(self, uuids: [v1, v2])
+        // Deliberately the unfiltered query: the `uuids:` overload reports success and
+        // then never calls `sdpQueryComplete`, so a connection that has to fall back to
+        // live discovery hangs forever instead of failing.
+        let result = device.performSDPQuery(self)
         if result != kIOReturnSuccess {
             onEvent?(.failed("SDP query failed to start (code \(result))"))
         }
@@ -139,7 +149,17 @@ public final class RFCOMMConnection: NSObject {
         var newChannel: IOBluetoothRFCOMMChannel?
         let openStatus = device.openRFCOMMChannelAsync(&newChannel, withChannelID: channelID, delegate: self)
         if openStatus != kIOReturnSuccess {
-            onEvent?(.failed("Failed to open RFCOMM channel (code \(openStatus))"))
+            // The headset serves one control channel at a time; just after a reconnect the
+            // previous one can still be tearing down. Worth one more try before giving up.
+            guard !didRetryChannelOpen else {
+                onEvent?(.failed("Failed to open RFCOMM channel (code \(openStatus))"))
+                return
+            }
+            didRetryChannelOpen = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                guard let self, self.device === device else { return }
+                self.openChannel(device: device, record: record)
+            }
             return
         }
         self.channel = newChannel
@@ -158,7 +178,9 @@ public final class RFCOMMConnection: NSObject {
 
 extension RFCOMMConnection {
     @objc func connectionComplete(_ device: IOBluetoothDevice!, status: IOReturn) {
-        guard status == kIOReturnSuccess, let device else {
+        // Callbacks for a device we've moved on from belong to an abandoned attempt.
+        guard let device, device === self.device else { return }
+        guard status == kIOReturnSuccess else {
             onEvent?(.failed("Failed to connect to headphones (code \(status))"))
             return
         }
@@ -166,13 +188,19 @@ extension RFCOMMConnection {
     }
 
     @objc func sdpQueryComplete(_ device: IOBluetoothDevice!, status: IOReturn) {
-        guard status == kIOReturnSuccess, let device else {
+        guard let device, device === self.device else { return }
+        guard status == kIOReturnSuccess else {
             onEvent?(.failed("Service discovery failed (code \(status)). Make sure the headphones are connected as an audio device first."))
             return
         }
         if let record = serviceRecord(on: device, uuidString: Self.serviceUUIDv2)
             ?? serviceRecord(on: device, uuidString: Self.serviceUUIDv1) {
             openChannel(device: device, record: record)
+        } else if (device.services as? [IOBluetoothSDPServiceRecord])?.isEmpty ?? true {
+            // Discovery "succeeded" but returned no services at all -- not even the audio
+            // profiles the headset is demonstrably using. That is what a missing Bluetooth
+            // privilege looks like from in here: the calls are accepted and quietly dropped.
+            onEvent?(.failed("macOS reported no Bluetooth services for these headphones. Check that XM6 Control is enabled under System Settings \u{2192} Privacy & Security \u{2192} Bluetooth."))
         } else {
             onEvent?(.failed("Couldn't find the Sony control service on this device."))
         }
@@ -183,11 +211,11 @@ extension RFCOMMConnection {
 
 extension RFCOMMConnection: IOBluetoothRFCOMMChannelDelegate {
     public func rfcommChannelOpenComplete(_ rfcommChannel: IOBluetoothRFCOMMChannel!, status error: IOReturn) {
+        guard rfcommChannel === channel else { return } // stale channel from an old attempt
         guard error == kIOReturnSuccess else {
             onEvent?(.failed("RFCOMM channel failed to open (code \(error))"))
             return
         }
-        didOpen = true
         // Opening the ACL/RFCOMM link too fast after pairing/wake can cause the very
         // first write to be silently dropped by the headset; give it a moment.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -196,12 +224,13 @@ extension RFCOMMConnection: IOBluetoothRFCOMMChannelDelegate {
     }
 
     public func rfcommChannelData(_ rfcommChannel: IOBluetoothRFCOMMChannel!, data dataPointer: UnsafeMutableRawPointer!, length dataLength: Int) {
-        guard let dataPointer else { return }
+        guard let dataPointer, rfcommChannel === channel else { return }
         let bytes = Array(UnsafeRawBufferPointer(start: dataPointer, count: dataLength))
         onEvent?(.dataReceived(bytes))
     }
 
     public func rfcommChannelClosed(_ rfcommChannel: IOBluetoothRFCOMMChannel!) {
+        guard rfcommChannel === channel else { return } // stale channel from an old attempt
         channel = nil
         onEvent?(.closed)
     }
