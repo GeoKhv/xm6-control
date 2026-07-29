@@ -4,6 +4,10 @@
 
 > Sony ships its Sound Connect companion app for iOS and Android — but not for macOS. This project fills that gap with a first-class Mac experience: a Liquid Glass interface, a menu bar panel, and a floating desktop widget, all speaking Sony's native headphone protocol over Bluetooth RFCOMM.
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="XM6 Control dashboard showing ambient sound control, listening mode, equalizer, speak-to-chat and wearing detection" width="450">
+</p>
+
 ---
 
 ## Features
@@ -93,9 +97,32 @@ Enable **Debug logging** at the bottom of the main window to capture a hex trans
 |---|---|
 | "Couldn't find a paired WH-1000XM6" | Pair the headphones in System Settings → Bluetooth first |
 | Connect fails immediately | Make sure the headphones show as *Connected* (audio) in the Bluetooth menu, then Try Again |
+| Stuck on "Connecting…", or "macOS reported no Bluetooth services" | Disconnect and reconnect the headphones — see [below](#stuck-on-connecting-disconnect-and-reconnect) |
 | Bluetooth permission prompt after rebuild | Expected with ad-hoc signing — see the `XM6Dev` certificate setup above |
 | A card shows "state not reported" | That query wasn't answered; controls still work. Enable debug logging and open an issue with the log |
 | Menu bar icon missing | The app may not be running — launch it again; it lives only in the menu bar (no Dock icon) |
+
+### Stuck on "Connecting…": disconnect and reconnect
+
+Occasionally the headphones connect to macOS for **audio only**, without the rest of the Bluetooth profiles. Music plays normally, so everything looks fine — but the Sony control service isn't published, and there is nothing for the app to talk to.
+
+You can confirm it:
+
+```sh
+system_profiler SPBluetoothDataType | grep -A6 "WH-1000XM6"
+```
+
+Look at the `Services:` line. A healthy link looks like this:
+
+```
+Services: 0x800039 < HFP AVRCP A2DP HID ACL >
+```
+
+A degraded one shows only `< A2DP ACL >`. In that state macOS reports **no service records at all** for the headphones, service discovery returns nothing, and no RFCOMM channel can be opened.
+
+**The fix is to disconnect the headphones and reconnect them** from the Bluetooth menu, which makes macOS renegotiate the full set of profiles. If the `Services:` line still comes back short, remove the device in System Settings → Bluetooth and pair it again to force fresh service discovery.
+
+This is a quirk of how the link is negotiated, not something the app can repair from its side — the profiles are already missing by the time it connects. What the app does do is stop waiting: it gives up after about 8 seconds, retries once, and then tells you what happened instead of spinning indefinitely.
 
 ## Acknowledgements
 
