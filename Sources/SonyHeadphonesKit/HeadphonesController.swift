@@ -27,6 +27,8 @@ public final class HeadphonesController: ObservableObject {
     @Published public private(set) var listeningMode: ListeningMode?
     @Published public private(set) var bgmRoomSize: BGMRoomSize?
     @Published public private(set) var devices: [MultipointDevice]?
+    /// `nil` until this Bluetooth session receives a valid hardware mute event.
+    @Published public private(set) var hardwareMicrophoneMuted: Bool?
 
     /// Raw BGM/cinema flags as last reported; listeningMode is derived from them.
     private var bgmEnabled = false
@@ -137,12 +139,9 @@ public final class HeadphonesController: ObservableObject {
     }
 
     public func disconnect() {
-        ackTimeoutTask?.cancel()
-        initRetryTask?.cancel()
-        stateTimeoutTask?.cancel()
-        connectTimeoutTask?.cancel()
         connectTarget = nil
         connection.disconnect()
+        resetSessionState()
         connectionState = .disconnected
     }
 
@@ -242,6 +241,7 @@ public final class HeadphonesController: ObservableObject {
         listeningMode = nil
         bgmRoomSize = nil
         devices = nil
+        hardwareMicrophoneMuted = nil
         bgmEnabled = false
         cinemaEnabled = false
         protocolVersion = .unknown
@@ -254,6 +254,7 @@ public final class HeadphonesController: ObservableObject {
             beginHandshake()
 
         case .closed:
+            resetSessionState()
             connectionState = .disconnected
 
         case .dataReceived(let bytes):
@@ -263,6 +264,7 @@ public final class HeadphonesController: ObservableObject {
             }
 
         case .failed(let message):
+            resetSessionState()
             lastError = message
             connectionState = .failed(message)
         }
@@ -380,6 +382,8 @@ public final class HeadphonesController: ObservableObject {
             updateListeningMode()
         case .deviceList(let list):
             devices = list
+        case .hardwareMicrophoneMute(let muted):
+            hardwareMicrophoneMuted = muted
         }
     }
 

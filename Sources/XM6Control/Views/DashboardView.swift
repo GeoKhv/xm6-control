@@ -3,6 +3,7 @@ import SonyHeadphonesKit
 
 struct DashboardView: View {
     @EnvironmentObject private var controller: HeadphonesController
+    @EnvironmentObject private var microphoneMuteIndicator: HardwareMicrophoneMuteIndicatorController
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -47,10 +48,16 @@ struct DashboardView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
 
-                Toggle("Debug logging (protocol.log)", isOn: $controller.protocolLoggingEnabled)
-                    .toggleStyle(.checkbox)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle(
+                        "Show hardware mic mute indicator",
+                        isOn: $microphoneMuteIndicator.isEnabled
+                    )
+                    Toggle("Debug logging (protocol.log)", isOn: $controller.protocolLoggingEnabled)
+                }
+                .toggleStyle(.checkbox)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             }
             .padding(20)
         }

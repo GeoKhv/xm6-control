@@ -56,6 +56,9 @@ enum Opcode {
 
     static let systemControlSet: UInt8 = 0x98
 
+    /// Unsolicited custom-button event family used by the XM6 hardware controls.
+    static let customButtonEvent: UInt8 = 0xc9
+
     /// Shared family for: pause-when-taken-off GET (subtype 0x01) and automatic
     /// power off duration (subtype 0x05).
     static let autoPowerFamilyGet: UInt8 = 0x26

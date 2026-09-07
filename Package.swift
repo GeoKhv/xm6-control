@@ -14,6 +14,11 @@ let package = Package(
                 .linkedFramework("IOBluetooth")
             ]
         ),
+        .testTarget(
+            name: "SonyHeadphonesKitTests",
+            dependencies: ["SonyHeadphonesKit"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
         .executableTarget(
             name: "XM6Control",
             dependencies: ["SonyHeadphonesKit"],

@@ -3,9 +3,15 @@ import SonyHeadphonesKit
 
 @main
 struct XM6ControlApp: App {
-    @StateObject private var controller = HeadphonesController()
+    @StateObject private var controller: HeadphonesController
+    @StateObject private var microphoneMuteIndicator: HardwareMicrophoneMuteIndicatorController
 
     init() {
+        let controller = HeadphonesController()
+        _controller = StateObject(wrappedValue: controller)
+        _microphoneMuteIndicator = StateObject(
+            wrappedValue: HardwareMicrophoneMuteIndicatorController(headphonesController: controller)
+        )
         ProbeMode.runIfRequested()
     }
 
@@ -13,6 +19,7 @@ struct XM6ControlApp: App {
         WindowGroup(id: "main") {
             ContentView()
                 .environmentObject(controller)
+                .environmentObject(microphoneMuteIndicator)
                 .frame(minWidth: 380, idealWidth: 420, minHeight: 560, idealHeight: 680)
         }
         .windowResizability(.contentSize)
