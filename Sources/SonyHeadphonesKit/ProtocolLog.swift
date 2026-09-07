@@ -41,6 +41,11 @@ final class ProtocolLog {
         appendLine("\(formatter.string(from: Date())) \(direction) \(hex)\(note.isEmpty ? "" : "  // \(note)")\n")
     }
 
+    func logDiagnostic(_ message: String) {
+        guard isEnabled else { return }
+        appendLine("\(formatter.string(from: Date())) \(message)\n")
+    }
+
     private func appendLine(_ line: String) {
         guard let url, let data = line.data(using: .utf8) else { return }
         if !FileManager.default.fileExists(atPath: url.path) {

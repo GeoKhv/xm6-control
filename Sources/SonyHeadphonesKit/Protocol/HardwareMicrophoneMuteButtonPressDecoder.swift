@@ -1,8 +1,9 @@
 import Foundation
 
 /// Decodes the unsolicited custom-button event emitted when the WH-1000XM6 hardware
-/// microphone mute button is double-pressed.
-enum HardwareMicrophoneMuteToggleDecoder {
+/// microphone button is double-pressed. The packet reports only the button press; it
+/// does not report or guarantee a microphone mute-state change.
+enum HardwareMicrophoneMuteButtonPressDecoder {
     private static let eventName = "keyCustomBtnTwo"
 
     static func decode(
@@ -15,8 +16,7 @@ enum HardwareMicrophoneMuteToggleDecoder {
             return nil
         }
 
-        // This field was 0x01 in every captured toggle. Its meaning is unknown; it is
-        // not an absolute microphone mute state.
+        // This field was 0x01 in every captured button press. Its meaning is unknown.
         guard payload[1] == 0x01 else { return nil }
 
         let nameLength = Int(payload[2])
@@ -28,6 +28,6 @@ enum HardwareMicrophoneMuteToggleDecoder {
             return nil
         }
 
-        return .hardwareMicrophoneMuteToggle
+        return .hardwareMicrophoneMuteButtonPressed
     }
 }

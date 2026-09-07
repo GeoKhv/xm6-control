@@ -19,9 +19,21 @@ let package = Package(
             dependencies: ["SonyHeadphonesKit"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
+        .target(
+            name: "XM6ControlCore",
+            swiftSettings: [.swiftLanguageMode(.v5)],
+            linkerSettings: [
+                .linkedFramework("CoreAudio")
+            ]
+        ),
+        .testTarget(
+            name: "XM6ControlCoreTests",
+            dependencies: ["XM6ControlCore"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
         .executableTarget(
             name: "XM6Control",
-            dependencies: ["SonyHeadphonesKit"],
+            dependencies: ["SonyHeadphonesKit", "XM6ControlCore"],
             exclude: ["Resources"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

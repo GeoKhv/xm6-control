@@ -1,4 +1,5 @@
 import SwiftUI
+import XM6ControlCore
 import SonyHeadphonesKit
 
 @main
@@ -8,9 +9,15 @@ struct XM6ControlApp: App {
 
     init() {
         let controller = HeadphonesController()
+        let microphoneActivityMonitor = XM6MicrophoneActivityMonitor { [weak controller] message in
+            controller?.logDiagnostic(message)
+        }
         _controller = StateObject(wrappedValue: controller)
         _microphoneMuteIndicator = StateObject(
-            wrappedValue: HardwareMicrophoneMuteIndicatorController(headphonesController: controller)
+            wrappedValue: HardwareMicrophoneMuteIndicatorController(
+                headphonesController: controller,
+                microphoneActivityMonitor: microphoneActivityMonitor
+            )
         )
         ProbeMode.runIfRequested()
     }

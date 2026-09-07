@@ -1,9 +1,11 @@
 import AppKit
 import Combine
 import SwiftUI
+import XM6ControlCore
 import SonyHeadphonesKit
 
-/// Owns the non-interactive overlay window and the app-layer preference that enables it.
+/// Coordinates CoreAudio session truth with Sony's button-press event, owns the
+/// inferred mute state, and presents the existing non-interactive overlay window.
 @MainActor
 final class HardwareMicrophoneMuteIndicatorController: ObservableObject {
     private static let preferenceKey = "showHardwareMicMuteIndicator"
@@ -12,27 +14,50 @@ final class HardwareMicrophoneMuteIndicatorController: ObservableObject {
     @Published var isEnabled: Bool {
         didSet {
             UserDefaults.standard.set(isEnabled, forKey: Self.preferenceKey)
-            updatePresentation()
+            updatePresentationForPreference()
         }
     }
 
-    private var hardwareMicrophoneMuted: Bool?
+    private let microphoneActivityMonitor: any XM6MicrophoneActivityProviding
+    private let diagnosticHandler: (String) -> Void
+    private var sessionState: XM6MicrophoneSessionState = .inactive
+    private var isXM6InputActive = false
     private var connectionState: ConnectionState = .disconnected
     private var panel: MicrophoneMuteIndicatorPanel?
     private var hideTask: Task<Void, Never>?
     private var presentationGeneration = 0
     private var cancellables: Set<AnyCancellable> = []
 
-    init(headphonesController: HeadphonesController) {
+    init(
+        headphonesController: HeadphonesController,
+        microphoneActivityMonitor: any XM6MicrophoneActivityProviding
+    ) {
         isEnabled = UserDefaults.standard.bool(forKey: Self.preferenceKey)
+        self.microphoneActivityMonitor = microphoneActivityMonitor
+        diagnosticHandler = { [weak headphonesController] message in
+            headphonesController?.logDiagnostic(message)
+        }
 
-        headphonesController.$hardwareMicrophoneMuted
-            .combineLatest(headphonesController.$connectionState)
-            .sink { [weak self] muted, connectionState in
+        headphonesController.hardwareMicrophoneMuteButtonPressedPublisher
+            .sink { [weak self] in
                 guard let self else { return }
-                self.hardwareMicrophoneMuted = muted
+                self.handleButtonPress()
+            }
+            .store(in: &cancellables)
+
+        headphonesController.$connectionState
+            .sink { [weak self] connectionState in
+                guard let self else { return }
                 self.connectionState = connectionState
-                self.updatePresentation()
+                self.synchronizeInputSession()
+            }
+            .store(in: &cancellables)
+
+        microphoneActivityMonitor.inputActivityPublisher
+            .sink { [weak self] active in
+                guard let self else { return }
+                self.isXM6InputActive = active
+                self.synchronizeInputSession()
             }
             .store(in: &cancellables)
 
@@ -41,25 +66,89 @@ final class HardwareMicrophoneMuteIndicatorController: ObservableObject {
                 self?.repositionIfVisible()
             }
             .store(in: &cancellables)
+
+        microphoneActivityMonitor.start()
     }
 
-    private func updatePresentation() {
-        presentationGeneration += 1
-        hideTask?.cancel()
-        hideTask = nil
-
-        guard isEnabled, connectionState == .connected,
-              let hardwareMicrophoneMuted else {
+    private func updatePresentationForPreference() {
+        guard isEnabled, connectionState == .connected else {
+            cancelPendingPresentation()
             hideImmediately()
             return
         }
 
-        if hardwareMicrophoneMuted {
+        if sessionState == .activeMuted {
+            cancelPendingPresentation()
             show(color: .systemRed)
         } else {
+            cancelPendingPresentation()
+            hideImmediately()
+        }
+    }
+
+    private func synchronizeInputSession() {
+        let shouldBeActive = isXM6InputActive && connectionState == .connected
+        if shouldBeActive, sessionState == .inactive {
+            apply(.inputBecameActive)
+        } else if !shouldBeActive, sessionState != .inactive {
+            apply(.inputBecameInactive)
+        }
+    }
+
+    private func handleButtonPress() {
+        let wasInactive = sessionState == .inactive
+        let transition = apply(.buttonPressed)
+        if wasInactive {
+            diagnosticHandler("Mic button pressed: ignored (input inactive)")
+        } else if transition.state == .activeMuted {
+            diagnosticHandler("Mic button pressed: inferred muted")
+        } else if transition.state == .activeUnmuted {
+            diagnosticHandler("Mic button pressed: inferred unmuted")
+        }
+    }
+
+    @discardableResult
+    private func apply(
+        _ event: XM6MicrophoneSessionEvent
+    ) -> XM6MicrophoneSessionTransition {
+        let previousState = sessionState
+        let transition = XM6MicrophoneSessionStateMachine.transition(
+            from: previousState,
+            event: event
+        )
+        sessionState = transition.state
+
+        if event == .inputBecameInactive, previousState != .inactive {
+            diagnosticHandler("CoreAudio: input session ended, clearing mute state")
+        }
+
+        present(transition.indicatorAction)
+        return transition
+    }
+
+    private func present(_ action: XM6MicrophoneIndicatorAction) {
+        switch action {
+        case .none:
+            return
+        case .hide:
+            cancelPendingPresentation()
+            hideImmediately()
+        case .showMuted:
+            guard isEnabled, connectionState == .connected else { return }
+            cancelPendingPresentation()
+            show(color: .systemRed)
+        case .showUnmuted:
+            guard isEnabled, connectionState == .connected else { return }
+            cancelPendingPresentation()
             show(color: .systemGreen)
             scheduleGreenHide(generation: presentationGeneration)
         }
+    }
+
+    private func cancelPendingPresentation() {
+        presentationGeneration += 1
+        hideTask?.cancel()
+        hideTask = nil
     }
 
     private func show(color: NSColor) {

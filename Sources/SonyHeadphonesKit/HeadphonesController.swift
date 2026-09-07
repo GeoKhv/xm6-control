@@ -27,8 +27,13 @@ public final class HeadphonesController: ObservableObject {
     @Published public private(set) var listeningMode: ListeningMode?
     @Published public private(set) var bgmRoomSize: BGMRoomSize?
     @Published public private(set) var devices: [MultipointDevice]?
-    /// `nil` until this Bluetooth session receives a valid hardware mute event.
-    @Published public private(set) var hardwareMicrophoneMuted: Bool?
+    private let hardwareMicrophoneMuteButtonPressedSubject = PassthroughSubject<Void, Never>()
+
+    /// Emits protocol truth only: Sony reported a hardware microphone-button press.
+    /// The packet does not say whether the microphone actually changed mute state.
+    public var hardwareMicrophoneMuteButtonPressedPublisher: AnyPublisher<Void, Never> {
+        hardwareMicrophoneMuteButtonPressedSubject.eraseToAnyPublisher()
+    }
 
     /// Raw BGM/cinema flags as last reported; listeningMode is derived from them.
     private var bgmEnabled = false
@@ -161,6 +166,11 @@ public final class HeadphonesController: ObservableObject {
         enqueue(payload, type: type)
     }
 
+    /// Adds an app-layer diagnostic to the existing opt-in protocol log.
+    public func logDiagnostic(_ message: String) {
+        protocolLog.logDiagnostic(message)
+    }
+
     public func setAmbientSound(_ state: AmbientSoundState) {
         ambientSound = state // optimistic; a NOTIFY will reconcile if the device disagrees
         enqueue(SonyCommands.buildAmbientSoundSet(state))
@@ -241,7 +251,6 @@ public final class HeadphonesController: ObservableObject {
         listeningMode = nil
         bgmRoomSize = nil
         devices = nil
-        hardwareMicrophoneMuted = nil
         bgmEnabled = false
         cinemaEnabled = false
         protocolVersion = .unknown
@@ -382,13 +391,8 @@ public final class HeadphonesController: ObservableObject {
             updateListeningMode()
         case .deviceList(let list):
             devices = list
-        case .hardwareMicrophoneMuteToggle:
-            // Sony sends a toggle notification, not an absolute state report. We infer
-            // that the first event transitions from unmuted to muted; future call/input
-            // lifecycle synchronization may be needed if observation begins out of sync.
-            hardwareMicrophoneMuted = HardwareMicrophoneMuteStateTransition.next(
-                after: hardwareMicrophoneMuted
-            )
+        case .hardwareMicrophoneMuteButtonPressed:
+            hardwareMicrophoneMuteButtonPressedSubject.send(())
         }
     }
 
@@ -455,11 +459,5 @@ public final class HeadphonesController: ObservableObject {
         // since it won't match the (by-then-advanced) expected sequence number.
         awaitingAck = false
         sendNextQueuedCommand()
-    }
-}
-
-enum HardwareMicrophoneMuteStateTransition {
-    static func next(after currentState: Bool?) -> Bool {
-        !(currentState ?? false)
     }
 }
