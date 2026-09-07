@@ -13,7 +13,7 @@ public enum HeadphonesEvent: Sendable {
     case bgmMode(enabled: Bool, roomSize: BGMRoomSize)
     case upmixCinema(Bool)
     case deviceList([MultipointDevice])
-    case hardwareMicrophoneMute(Bool)
+    case hardwareMicrophoneMuteToggle
 }
 
 /// Dispatches an incoming payload to the right decoder.
@@ -41,8 +41,11 @@ public enum SonyEventDecoder {
         if opcode == Opcode.initReply {
             return .protocolInfo(SonyCommands.protocolVersion(fromInitReplyPayload: payload))
         }
-        if let muted = HardwareMicrophoneMuteDecoder.decode(payload) {
-            return .hardwareMicrophoneMute(muted)
+        if let event = HardwareMicrophoneMuteToggleDecoder.decode(
+            payload,
+            messageType: messageType
+        ) {
+            return event
         }
         if SonyCommands.isAmbientSoundReply(opcode: opcode),
            let state = SonyCommands.decodeAmbientSound(payload) {

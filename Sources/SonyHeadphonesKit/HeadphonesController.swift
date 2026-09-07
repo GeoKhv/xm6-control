@@ -382,8 +382,13 @@ public final class HeadphonesController: ObservableObject {
             updateListeningMode()
         case .deviceList(let list):
             devices = list
-        case .hardwareMicrophoneMute(let muted):
-            hardwareMicrophoneMuted = muted
+        case .hardwareMicrophoneMuteToggle:
+            // Sony sends a toggle notification, not an absolute state report. We infer
+            // that the first event transitions from unmuted to muted; future call/input
+            // lifecycle synchronization may be needed if observation begins out of sync.
+            hardwareMicrophoneMuted = HardwareMicrophoneMuteStateTransition.next(
+                after: hardwareMicrophoneMuted
+            )
         }
     }
 
@@ -450,5 +455,11 @@ public final class HeadphonesController: ObservableObject {
         // since it won't match the (by-then-advanced) expected sequence number.
         awaitingAck = false
         sendNextQueuedCommand()
+    }
+}
+
+enum HardwareMicrophoneMuteStateTransition {
+    static func next(after currentState: Bool?) -> Bool {
+        !(currentState ?? false)
     }
 }
