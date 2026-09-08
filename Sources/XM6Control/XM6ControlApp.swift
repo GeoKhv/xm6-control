@@ -7,13 +7,17 @@ struct XM6ControlApp: App {
     @StateObject private var controller: HeadphonesController
     @StateObject private var microphoneMuteIndicator: HardwareMicrophoneMuteIndicatorController
     private let muteSignalProbe: XM6MuteSignalProbe?
+    private let hidMuteProbe: XM6HIDMuteProbe?
 
     init() {
         let controller = HeadphonesController()
         let muteSignalProbeEnabled = XM6MuteSignalProbeSupport.isEnabled(
             arguments: CommandLine.arguments
         )
-        if muteSignalProbeEnabled {
+        let hidMuteProbeEnabled = XM6HIDProbeSupport.isEnabled(
+            arguments: CommandLine.arguments
+        )
+        if muteSignalProbeEnabled || hidMuteProbeEnabled {
             controller.enableProtocolLoggingForCurrentProcess()
         }
         let microphoneActivityMonitor = XM6MicrophoneActivityMonitor { [weak controller] message in
@@ -34,6 +38,15 @@ struct XM6ControlApp: App {
             probe.start()
         } else {
             muteSignalProbe = nil
+        }
+        if hidMuteProbeEnabled {
+            let probe = XM6HIDMuteProbe { [weak controller] message in
+                controller?.logDiagnostic(message)
+            }
+            hidMuteProbe = probe
+            probe.start()
+        } else {
+            hidMuteProbe = nil
         }
         ProbeMode.runIfRequested()
     }

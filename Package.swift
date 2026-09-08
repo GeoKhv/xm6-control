@@ -38,7 +38,8 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v5)],
             linkerSettings: [
                 .linkedFramework("AVFAudio"),
-                .linkedFramework("CoreAudio")
+                .linkedFramework("CoreAudio"),
+                .linkedFramework("IOKit")
             ]
         ),
         // Developer tool: connects to the headphones and sends raw hex payloads,
