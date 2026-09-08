@@ -171,6 +171,14 @@ public final class HeadphonesController: ObservableObject {
         protocolLog.logDiagnostic(message)
     }
 
+    /// Enables the existing protocol log for this process without changing the
+    /// user's persisted Debug logging preference. Diagnostic launch modes use this
+    /// so their evidence is always captured while normal launches remain unchanged.
+    public func enableProtocolLoggingForCurrentProcess() {
+        protocolLog.isEnabled = true
+        protocolLog.startSession(deviceName: deviceName)
+    }
+
     public func setAmbientSound(_ state: AmbientSoundState) {
         ambientSound = state // optimistic; a NOTIFY will reconcile if the device disagrees
         enqueue(SonyCommands.buildAmbientSoundSet(state))

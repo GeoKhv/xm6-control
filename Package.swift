@@ -35,7 +35,11 @@ let package = Package(
             name: "XM6Control",
             dependencies: ["SonyHeadphonesKit", "XM6ControlCore"],
             exclude: ["Resources"],
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: [.swiftLanguageMode(.v5)],
+            linkerSettings: [
+                .linkedFramework("AVFAudio"),
+                .linkedFramework("CoreAudio")
+            ]
         ),
         // Developer tool: connects to the headphones and sends raw hex payloads,
         // printing every reply. Used to verify command layouts on real hardware.

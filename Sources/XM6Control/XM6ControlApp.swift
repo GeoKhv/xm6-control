@@ -6,9 +6,16 @@ import SonyHeadphonesKit
 struct XM6ControlApp: App {
     @StateObject private var controller: HeadphonesController
     @StateObject private var microphoneMuteIndicator: HardwareMicrophoneMuteIndicatorController
+    private let muteSignalProbe: XM6MuteSignalProbe?
 
     init() {
         let controller = HeadphonesController()
+        let muteSignalProbeEnabled = XM6MuteSignalProbeSupport.isEnabled(
+            arguments: CommandLine.arguments
+        )
+        if muteSignalProbeEnabled {
+            controller.enableProtocolLoggingForCurrentProcess()
+        }
         let microphoneActivityMonitor = XM6MicrophoneActivityMonitor { [weak controller] message in
             controller?.logDiagnostic(message)
         }
@@ -19,6 +26,15 @@ struct XM6ControlApp: App {
                 microphoneActivityMonitor: microphoneActivityMonitor
             )
         )
+        if muteSignalProbeEnabled {
+            let probe = XM6MuteSignalProbe { [weak controller] message in
+                controller?.logDiagnostic(message)
+            }
+            muteSignalProbe = probe
+            probe.start()
+        } else {
+            muteSignalProbe = nil
+        }
         ProbeMode.runIfRequested()
     }
 

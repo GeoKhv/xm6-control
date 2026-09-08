@@ -294,7 +294,12 @@ public final class XM6MicrophoneActivityMonitor: ObservableObject, XM6Microphone
             ) ?? ""
             let inputChannels = channelCount(deviceID: deviceID, scope: kAudioObjectPropertyScopeInput)
             guard inputChannels > 0,
-                  isXM6(name: name, uid: uid, modelUID: modelUID, manufacturer: manufacturer) else {
+                  XM6MuteSignalProbeSupport.isXM6(
+                    name: name,
+                    uid: uid,
+                    modelUID: modelUID,
+                    manufacturer: manufacturer
+                  ) else {
                 return nil
             }
             return DeviceDescription(
@@ -310,22 +315,6 @@ public final class XM6MicrophoneActivityMonitor: ObservableObject, XM6Microphone
         }.sorted {
             ($0.name, $0.uid, $0.id) < ($1.name, $1.uid, $1.id)
         }
-    }
-
-    private func isXM6(
-        name: String,
-        uid: String,
-        modelUID: String,
-        manufacturer: String
-    ) -> Bool {
-        let identities = [name, uid, modelUID].map(normalized)
-        if identities.contains(where: { $0.contains("wh1000xm6") }) { return true }
-        return normalized(manufacturer).contains("sony")
-            && identities.contains(where: { $0.contains("1000xm6") })
-    }
-
-    private func normalized(_ value: String) -> String {
-        value.lowercased().filter { $0.isLetter || $0.isNumber }
     }
 
     private func channelCount(
