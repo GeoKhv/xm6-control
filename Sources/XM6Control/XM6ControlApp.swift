@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import XM6ControlCore
 import SonyHeadphonesKit
@@ -41,7 +42,7 @@ struct XM6ControlApp: App {
             CompactControlsView()
                 .environmentObject(controller)
         } label: {
-            Image(systemName: "headphones.circle.fill")
+            MenuBarHeadphonesIcon(indicator: microphoneMuteIndicator)
         }
         .menuBarExtraStyle(.window)
 
@@ -52,5 +53,50 @@ struct XM6ControlApp: App {
         }
         .windowResizability(.contentSize)
         .defaultPosition(.topTrailing)
+    }
+}
+
+private struct MenuBarHeadphonesIcon: View {
+    @ObservedObject var indicator: HardwareMicrophoneMuteIndicatorController
+    @Environment(\.colorScheme) private var colorScheme
+
+    @ViewBuilder
+    var body: some View {
+        if indicator.menuBarAppearance == .hidden {
+            Image(systemName: "headphones.circle.fill")
+        } else {
+            Image(nsImage: activeIconImage)
+                .renderingMode(.original)
+        }
+    }
+
+    /// MenuBarExtra templates its final label, including child overlays. Rendering the
+    /// complete active icon as one original image is what preserves the badge color.
+    private var activeIconImage: NSImage {
+        let color: NSColor
+        switch indicator.menuBarAppearance {
+        case .hidden: color = .clear
+        case .muted: color = .systemRed
+        case .unmuted: color = .systemGreen
+        }
+
+        let artwork = ZStack(alignment: .bottomTrailing) {
+            Image(systemName: "headphones.circle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
+            Circle()
+                .fill(Color(nsColor: color))
+                .overlay {
+                    Circle().strokeBorder(.white.opacity(0.95), lineWidth: 1)
+                }
+                .frame(width: 7, height: 7)
+        }
+        .frame(width: 16, height: 16)
+
+        let renderer = ImageRenderer(content: artwork)
+        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+        let image = renderer.nsImage ?? NSImage(size: NSSize(width: 16, height: 16))
+        image.isTemplate = false
+        return image
     }
 }

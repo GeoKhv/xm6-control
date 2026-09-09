@@ -8,21 +8,32 @@ import SonyHeadphonesKit
 /// inferred mute state, and presents the existing non-interactive overlay window.
 @MainActor
 final class HardwareMicrophoneMuteIndicatorController: ObservableObject {
-    private static let preferenceKey = "showHardwareMicMuteIndicator"
+    private static let enabledPreferenceKey = "showHardwareMicMuteIndicator"
+    private static let locationPreferenceKey = "hardwareMicMuteIndicatorLocation"
     private static let indicatorSize = CGSize(width: 18, height: 18)
 
     @Published var isEnabled: Bool {
         didSet {
-            UserDefaults.standard.set(isEnabled, forKey: Self.preferenceKey)
-            updatePresentationForPreference()
+            UserDefaults.standard.set(isEnabled, forKey: Self.enabledPreferenceKey)
+            updatePresentationForEnablement()
         }
     }
+
+    @Published var location: XM6MicrophoneIndicatorLocation {
+        didSet {
+            UserDefaults.standard.set(location.rawValue, forKey: Self.locationPreferenceKey)
+            renderCurrentAppearance()
+        }
+    }
+
+    @Published private(set) var menuBarAppearance: XM6MicrophoneIndicatorAppearance = .hidden
 
     private let microphoneActivityMonitor: any XM6MicrophoneActivityProviding
     private let diagnosticHandler: (String) -> Void
     private var sessionState: XM6MicrophoneSessionState = .inactive
     private var isXM6InputActive = false
     private var connectionState: ConnectionState = .disconnected
+    private var appearance: XM6MicrophoneIndicatorAppearance = .hidden
     private var panel: MicrophoneMuteIndicatorPanel?
     private var hideTask: Task<Void, Never>?
     private var presentationGeneration = 0
@@ -32,7 +43,10 @@ final class HardwareMicrophoneMuteIndicatorController: ObservableObject {
         headphonesController: HeadphonesController,
         microphoneActivityMonitor: any XM6MicrophoneActivityProviding
     ) {
-        isEnabled = UserDefaults.standard.bool(forKey: Self.preferenceKey)
+        isEnabled = UserDefaults.standard.bool(forKey: Self.enabledPreferenceKey)
+        location = UserDefaults.standard.string(forKey: Self.locationPreferenceKey)
+            .flatMap(XM6MicrophoneIndicatorLocation.init(rawValue:))
+            ?? .defaultValue
         self.microphoneActivityMonitor = microphoneActivityMonitor
         diagnosticHandler = { [weak headphonesController] message in
             headphonesController?.logDiagnostic(message)
@@ -70,20 +84,12 @@ final class HardwareMicrophoneMuteIndicatorController: ObservableObject {
         microphoneActivityMonitor.start()
     }
 
-    private func updatePresentationForPreference() {
-        guard isEnabled, connectionState == .connected else {
-            cancelPendingPresentation()
-            hideImmediately()
-            return
-        }
-
-        if sessionState == .activeMuted {
-            cancelPendingPresentation()
-            show(color: .systemRed)
-        } else {
-            cancelPendingPresentation()
-            hideImmediately()
-        }
+    private func updatePresentationForEnablement() {
+        cancelPendingPresentation()
+        appearance = isEnabled && connectionState == .connected && sessionState == .activeMuted
+            ? .muted
+            : .hidden
+        renderCurrentAppearance()
     }
 
     private func synchronizeInputSession() {
@@ -127,20 +133,15 @@ final class HardwareMicrophoneMuteIndicatorController: ObservableObject {
     }
 
     private func present(_ action: XM6MicrophoneIndicatorAction) {
-        switch action {
-        case .none:
-            return
-        case .hide:
-            cancelPendingPresentation()
-            hideImmediately()
-        case .showMuted:
-            guard isEnabled, connectionState == .connected else { return }
-            cancelPendingPresentation()
-            show(color: .systemRed)
-        case .showUnmuted:
-            guard isEnabled, connectionState == .connected else { return }
-            cancelPendingPresentation()
-            show(color: .systemGreen)
+        guard action != .none else { return }
+        cancelPendingPresentation()
+        appearance = XM6MicrophoneIndicatorPresentationStateMachine.transition(
+            from: appearance,
+            action: action
+        )
+        renderCurrentAppearance()
+
+        if action == .showUnmuted, isEnabled, connectionState == .connected {
             scheduleGreenHide(generation: presentationGeneration)
         }
     }
@@ -151,7 +152,25 @@ final class HardwareMicrophoneMuteIndicatorController: ObservableObject {
         hideTask = nil
     }
 
-    private func show(color: NSColor) {
+    private func renderCurrentAppearance() {
+        guard isEnabled, connectionState == .connected, appearance != .hidden else {
+            menuBarAppearance = .hidden
+            hideImmediately()
+            return
+        }
+
+        switch location {
+        case .nearNotch:
+            menuBarAppearance = .hidden
+            showNearNotch(color: appearance.color)
+        case .menuBarIcon:
+            hideImmediately()
+            menuBarAppearance = appearance
+            diagnosticHandler("Mic indicator renderer: menu bar \(appearance)")
+        }
+    }
+
+    private func showNearNotch(color: NSColor) {
         let panel = panel ?? makePanel()
         self.panel = panel
         updateContent(of: panel, color: color)
@@ -169,7 +188,17 @@ final class HardwareMicrophoneMuteIndicatorController: ObservableObject {
             }
             guard let self, !Task.isCancelled,
                   generation == self.presentationGeneration else { return }
-            self.fadeOut(generation: generation)
+            self.hideTransientPresentation(generation: generation)
+        }
+    }
+
+    private func hideTransientPresentation(generation: Int) {
+        appearance = .hidden
+        menuBarAppearance = .hidden
+        if location == .nearNotch {
+            fadeOut(generation: generation)
+        } else {
+            hideImmediately()
         }
     }
 
@@ -269,6 +298,16 @@ final class HardwareMicrophoneMuteIndicatorController: ObservableObject {
         let hasLeftAuxiliaryArea = screen.auxiliaryTopLeftArea?.isEmpty == false
         let hasRightAuxiliaryArea = screen.auxiliaryTopRightArea?.isEmpty == false
         return screen.safeAreaInsets.top > 0 && (hasLeftAuxiliaryArea || hasRightAuxiliaryArea)
+    }
+}
+
+private extension XM6MicrophoneIndicatorAppearance {
+    var color: NSColor {
+        switch self {
+        case .muted: return .systemRed
+        case .unmuted: return .systemGreen
+        case .hidden: return .clear
+        }
     }
 }
 

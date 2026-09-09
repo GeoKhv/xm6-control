@@ -63,6 +63,20 @@ struct XM6MicrophoneSessionStateMachineTests {
         #expect(restarted.indicatorAction == .none)
     }
 
+    @Test func disconnectWhileMutedClearsStateBeforeReconnectSession() {
+        var state: XM6MicrophoneSessionState = .activeUnmuted
+        state = apply(.buttonPressed, to: state).state
+        #expect(state == .activeMuted)
+
+        let disconnected = apply(.inputBecameInactive, to: state)
+        #expect(disconnected.state == .inactive)
+        #expect(disconnected.indicatorAction == .hide)
+
+        let reconnectedSession = apply(.inputBecameActive, to: disconnected.state)
+        #expect(reconnectedSession.state == .activeUnmuted)
+        #expect(reconnectedSession.indicatorAction == .none)
+    }
+
     private func apply(
         _ event: XM6MicrophoneSessionEvent,
         to state: XM6MicrophoneSessionState

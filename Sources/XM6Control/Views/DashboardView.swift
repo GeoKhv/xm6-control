@@ -1,5 +1,6 @@
 import SwiftUI
 import SonyHeadphonesKit
+import XM6ControlCore
 
 struct DashboardView: View {
     @EnvironmentObject private var controller: HeadphonesController
@@ -53,6 +54,11 @@ struct DashboardView: View {
                         "Show hardware mic mute indicator",
                         isOn: $microphoneMuteIndicator.isEnabled
                     )
+                    Picker("Indicator location", selection: $microphoneMuteIndicator.location) {
+                        Text("Near notch").tag(XM6MicrophoneIndicatorLocation.nearNotch)
+                        Text("Menu bar icon").tag(XM6MicrophoneIndicatorLocation.menuBarIcon)
+                    }
+                    .disabled(!microphoneMuteIndicator.isEnabled)
                     Toggle("Debug logging (protocol.log)", isOn: $controller.protocolLoggingEnabled)
                 }
                 .toggleStyle(.checkbox)
