@@ -16,12 +16,19 @@ struct ConnectingView: View {
                     .font(.subheadline)
                     .foregroundStyle(.tertiary)
             }
+            if controller.connectionState == .reconnecting {
+                Button("Try Again") {
+                    controller.autoConnect()
+                }
+                .buttonStyle(.bordered)
+            }
         }
     }
 
     private var statusText: String {
         switch controller.connectionState {
         case .connecting: return "Connecting\u{2026}"
+        case .reconnecting: return "Reconnecting\u{2026}"
         case .initializing: return "Talking to headphones\u{2026}"
         default: return "Connecting\u{2026}"
         }

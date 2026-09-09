@@ -11,7 +11,7 @@ struct ContentView: View {
             switch controller.connectionState {
             case .disconnected, .failed, .searching:
                 DisconnectedView()
-            case .connecting, .initializing:
+            case .connecting, .reconnecting, .initializing:
                 ConnectingView()
             case .connected:
                 DashboardView()

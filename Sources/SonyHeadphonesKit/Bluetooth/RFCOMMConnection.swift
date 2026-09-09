@@ -51,6 +51,10 @@ public final class RFCOMMConnection: NSObject {
         pairedDevices().first { $0.name.localizedCaseInsensitiveContains("WH-1000XM6") }
     }
 
+    static func isDeviceConnected(address: String) -> Bool {
+        device(forAddress: address)?.isConnected() == true
+    }
+
     private static func device(forAddress address: String) -> IOBluetoothDevice? {
         // Prefer the registry's own object for this address: it carries the paired-device
         // state, where a freshly constructed one starts blank.

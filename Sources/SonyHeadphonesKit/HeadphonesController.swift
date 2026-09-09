@@ -63,9 +63,13 @@ public final class HeadphonesController: ObservableObject {
     private var initRetryTask: Task<Void, Never>?
     private var stateTimeoutTask: Task<Void, Never>?
     private var connectTimeoutTask: Task<Void, Never>?
+    private var automaticReconnectTask: Task<Void, Never>?
     private var initRetryCount = 0
     private var connectRetryCount = 0
+    private var automaticReconnectAttempt = 0
     private var connectTarget: (address: String, name: String?)?
+    private var hasEstablishedConnection = false
+    private var isAutomaticReconnectAttempt = false
     private var didApplyConnectDefaults = false
 
     public init() {
@@ -98,19 +102,22 @@ public final class HeadphonesController: ObservableObject {
     }
 
     public func connect(toAddress address: String, name: String?) {
+        cancelAutomaticReconnect()
+        hasEstablishedConnection = false
         connectRetryCount = 0
         connectTarget = (address, name)
         attemptConnect()
     }
 
-    private func attemptConnect() {
+    private func attemptConnect(automaticallyReconnecting: Bool = false) {
         guard let target = connectTarget else { return }
         // Tear down any live channel first; connecting on top of an open RFCOMM
         // channel leaks it and leaves two delegates fighting over one session.
         connection.disconnect()
         resetSessionState()
+        isAutomaticReconnectAttempt = automaticallyReconnecting
         deviceName = target.name
-        connectionState = .connecting
+        connectionState = automaticallyReconnecting ? .reconnecting : .connecting
         lastError = nil
         protocolLog.startSession(deviceName: target.name)
         connection.connect(toDeviceAddress: target.address)
@@ -132,7 +139,14 @@ public final class HeadphonesController: ObservableObject {
     }
 
     private func handleConnectTimeout() {
-        guard connectionState == .connecting || connectionState == .initializing else { return }
+        guard connectionState == .connecting || connectionState == .reconnecting
+                || connectionState == .initializing else { return }
+        if isAutomaticReconnectAttempt {
+            continueAutomaticReconnect(
+                after: "The headphones didn't answer the automatic reconnect attempt."
+            )
+            return
+        }
         guard connectRetryCount < 1 else {
             lastError = "The headphones didn\u{2019}t answer. Make sure they\u{2019}re on and connected as an audio device, then try again."
             connectionState = .failed(lastError ?? "")
@@ -144,7 +158,10 @@ public final class HeadphonesController: ObservableObject {
     }
 
     public func disconnect() {
+        cancelAutomaticReconnect()
         connectTarget = nil
+        hasEstablishedConnection = false
+        isAutomaticReconnectAttempt = false
         connection.disconnect()
         resetSessionState()
         connectionState = .disconnected
@@ -259,12 +276,22 @@ public final class HeadphonesController: ObservableObject {
     private func handle(_ event: RFCOMMConnectionEvent) {
         switch event {
         case .opened:
-            connectionState = .initializing
+            if !isAutomaticReconnectAttempt {
+                connectionState = .initializing
+            }
             beginHandshake()
 
         case .closed:
             resetSessionState()
-            connectionState = .disconnected
+            if hasEstablishedConnection, connectTarget != nil {
+                if isAutomaticReconnectAttempt {
+                    continueAutomaticReconnect(after: "RFCOMM connection closed")
+                } else {
+                    beginAutomaticReconnect(reason: "RFCOMM connection closed")
+                }
+            } else {
+                connectionState = .disconnected
+            }
 
         case .dataReceived(let bytes):
             protocolLog.log("RX", bytes)
@@ -274,9 +301,73 @@ public final class HeadphonesController: ObservableObject {
 
         case .failed(let message):
             resetSessionState()
-            lastError = message
-            connectionState = .failed(message)
+            if hasEstablishedConnection, connectTarget != nil {
+                if isAutomaticReconnectAttempt {
+                    continueAutomaticReconnect(after: message)
+                } else {
+                    beginAutomaticReconnect(reason: message)
+                }
+            } else {
+                lastError = message
+                connectionState = .failed(message)
+            }
         }
+    }
+
+    private func beginAutomaticReconnect(reason: String) {
+        automaticReconnectAttempt = 0
+        isAutomaticReconnectAttempt = false
+        protocolLog.logDiagnostic("Auto-reconnect: \(reason)")
+        scheduleAutomaticReconnect()
+    }
+
+    private func continueAutomaticReconnect(after reason: String) {
+        connection.disconnect()
+        isAutomaticReconnectAttempt = false
+        protocolLog.logDiagnostic("Auto-reconnect attempt failed: \(reason)")
+        scheduleAutomaticReconnect()
+    }
+
+    private func scheduleAutomaticReconnect() {
+        guard hasEstablishedConnection, connectTarget != nil else {
+            connectionState = .disconnected
+            return
+        }
+
+        automaticReconnectTask?.cancel()
+        connectionState = .reconnecting
+        lastError = nil
+        let attempt = automaticReconnectAttempt
+        let delay = AutomaticReconnectBackoff.delayNanoseconds(forAttempt: attempt)
+        automaticReconnectAttempt += 1
+        automaticReconnectTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: delay)
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.tryAutomaticReconnectIfDeviceIsBack()
+        }
+    }
+
+    private func tryAutomaticReconnectIfDeviceIsBack() {
+        guard hasEstablishedConnection, let target = connectTarget else { return }
+        guard RFCOMMConnection.isDeviceConnected(address: target.address) else {
+            protocolLog.logDiagnostic("Auto-reconnect: headphones not connected yet")
+            scheduleAutomaticReconnect()
+            return
+        }
+
+        protocolLog.logDiagnostic("Auto-reconnect: headphones returned, opening control channel")
+        attemptConnect(automaticallyReconnecting: true)
+    }
+
+    private func cancelAutomaticReconnect() {
+        automaticReconnectTask?.cancel()
+        automaticReconnectTask = nil
+        automaticReconnectAttempt = 0
+        isAutomaticReconnectAttempt = false
     }
 
     private func beginHandshake() {
@@ -305,8 +396,13 @@ public final class HeadphonesController: ObservableObject {
     private func retryInitIfNeeded() {
         guard protocolVersion == .unknown else { return } // already got a reply
         guard initRetryCount < 2 else {
-            lastError = "The headphones didn't respond to the connection handshake."
-            connectionState = .failed(lastError ?? "")
+            let message = "The headphones didn't respond to the connection handshake."
+            if isAutomaticReconnectAttempt {
+                continueAutomaticReconnect(after: message)
+            } else {
+                lastError = message
+                connectionState = .failed(message)
+            }
             return
         }
         initRetryCount += 1
@@ -350,6 +446,11 @@ public final class HeadphonesController: ObservableObject {
             protocolVersion = version
             initRetryTask?.cancel()
             connectTimeoutTask?.cancel()
+            automaticReconnectTask?.cancel()
+            automaticReconnectTask = nil
+            automaticReconnectAttempt = 0
+            isAutomaticReconnectAttempt = false
+            hasEstablishedConnection = true
             connectionState = .connected
             requestFullState()
             startStateTimeout()

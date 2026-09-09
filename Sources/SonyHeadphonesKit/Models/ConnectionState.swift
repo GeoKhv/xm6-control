@@ -4,6 +4,7 @@ public enum ConnectionState: Equatable, Sendable {
     case disconnected
     case searching
     case connecting
+    case reconnecting
     case initializing
     case connected
     case failed(String)

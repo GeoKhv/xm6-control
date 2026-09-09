@@ -193,6 +193,7 @@ struct CompactControlsView: View {
     private var promptText: String {
         switch controller.connectionState {
         case .connecting, .initializing: return "Connecting\u{2026}"
+        case .reconnecting: return "Reconnecting\u{2026}"
         case .failed: return "Couldn't reach the headphones.\nMake sure they're on and paired."
         default: return "Not connected."
         }
