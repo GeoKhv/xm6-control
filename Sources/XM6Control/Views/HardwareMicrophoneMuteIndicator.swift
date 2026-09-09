@@ -27,11 +27,11 @@ final class HardwareMicrophoneMuteIndicatorController: ObservableObject {
     }
 
     @Published private(set) var menuBarAppearance: XM6MicrophoneIndicatorAppearance = .hidden
+    @Published private(set) var isMicrophoneStateUnknown = false
 
     private let microphoneActivityMonitor: any XM6MicrophoneActivityProviding
     private let diagnosticHandler: (String) -> Void
-    private var sessionState: XM6MicrophoneSessionState = .inactive
-    private var isXM6InputActive = false
+    private var sessionStateMachine = XM6MicrophoneSessionStateMachine()
     private var connectionState: ConnectionState = .disconnected
     private var appearance: XM6MicrophoneIndicatorAppearance = .hidden
     private var panel: MicrophoneMuteIndicatorPanel?
@@ -63,15 +63,14 @@ final class HardwareMicrophoneMuteIndicatorController: ObservableObject {
             .sink { [weak self] connectionState in
                 guard let self else { return }
                 self.connectionState = connectionState
-                self.synchronizeInputSession()
+                self.apply(.controlConnectionChanged(isConnected: connectionState == .connected))
             }
             .store(in: &cancellables)
 
-        microphoneActivityMonitor.inputActivityPublisher
+        microphoneActivityMonitor.inputActivityObservationPublisher
             .sink { [weak self] active in
                 guard let self else { return }
-                self.isXM6InputActive = active
-                self.synchronizeInputSession()
+                self.apply(.inputActivityObserved(active))
             }
             .store(in: &cancellables)
 
@@ -86,26 +85,25 @@ final class HardwareMicrophoneMuteIndicatorController: ObservableObject {
 
     private func updatePresentationForEnablement() {
         cancelPendingPresentation()
-        appearance = isEnabled && connectionState == .connected && sessionState == .activeMuted
-            ? .muted
-            : .hidden
+        if isEnabled, connectionState == .connected {
+            switch sessionStateMachine.state {
+            case .activeMuted: appearance = .muted
+            case .activeUnknown: appearance = .unknown
+            case .inactive, .activeUnmuted: appearance = .hidden
+            }
+        } else {
+            appearance = .hidden
+        }
         renderCurrentAppearance()
     }
 
-    private func synchronizeInputSession() {
-        let shouldBeActive = isXM6InputActive && connectionState == .connected
-        if shouldBeActive, sessionState == .inactive {
-            apply(.inputBecameActive)
-        } else if !shouldBeActive, sessionState != .inactive {
-            apply(.inputBecameInactive)
-        }
-    }
-
     private func handleButtonPress() {
-        let wasInactive = sessionState == .inactive
+        let previousState = sessionStateMachine.state
         let transition = apply(.buttonPressed)
-        if wasInactive {
+        if previousState == .inactive {
             diagnosticHandler("Mic button pressed: ignored (input inactive)")
+        } else if previousState == .activeUnknown {
+            diagnosticHandler("Mic button pressed: state remains unknown")
         } else if transition.state == .activeMuted {
             diagnosticHandler("Mic button pressed: inferred muted")
         } else if transition.state == .activeUnmuted {
@@ -117,15 +115,18 @@ final class HardwareMicrophoneMuteIndicatorController: ObservableObject {
     private func apply(
         _ event: XM6MicrophoneSessionEvent
     ) -> XM6MicrophoneSessionTransition {
-        let previousState = sessionState
-        let transition = XM6MicrophoneSessionStateMachine.transition(
-            from: previousState,
-            event: event
-        )
-        sessionState = transition.state
+        let previousState = sessionStateMachine.state
+        let transition = sessionStateMachine.handle(event)
+        isMicrophoneStateUnknown = transition.state == .activeUnknown
 
-        if event == .inputBecameInactive, previousState != .inactive {
+        if event == .inputActivityObserved(false), previousState != .inactive {
             diagnosticHandler("CoreAudio: input session ended, clearing mute state")
+        } else if transition.state == .activeUnknown, previousState != .activeUnknown {
+            diagnosticHandler("Microphone state unknown: observation gap")
+        } else if transition.state == .activeUnmuted,
+                  previousState == .inactive,
+                  event == .inputActivityObserved(true) {
+            diagnosticHandler("CoreAudio: new input session, unmuted baseline established")
         }
 
         present(transition.indicatorAction)
@@ -162,7 +163,7 @@ final class HardwareMicrophoneMuteIndicatorController: ObservableObject {
         switch location {
         case .nearNotch:
             menuBarAppearance = .hidden
-            showNearNotch(color: appearance.color)
+            showNearNotch(appearance: appearance)
         case .menuBarIcon:
             hideImmediately()
             menuBarAppearance = appearance
@@ -170,10 +171,10 @@ final class HardwareMicrophoneMuteIndicatorController: ObservableObject {
         }
     }
 
-    private func showNearNotch(color: NSColor) {
+    private func showNearNotch(appearance: XM6MicrophoneIndicatorAppearance) {
         let panel = panel ?? makePanel()
         self.panel = panel
-        updateContent(of: panel, color: color)
+        updateContent(of: panel, appearance: appearance)
         position(panel)
         panel.alphaValue = 1
         panel.orderFrontRegardless()
@@ -248,9 +249,12 @@ final class HardwareMicrophoneMuteIndicatorController: ObservableObject {
         return panel
     }
 
-    private func updateContent(of panel: NSPanel, color: NSColor) {
+    private func updateContent(
+        of panel: NSPanel,
+        appearance: XM6MicrophoneIndicatorAppearance
+    ) {
         panel.contentView = NSHostingView(
-            rootView: HardwareMicrophoneMuteIndicatorView(color: Color(nsColor: color))
+            rootView: HardwareMicrophoneMuteIndicatorView(appearance: appearance)
         )
     }
 
@@ -306,6 +310,7 @@ private extension XM6MicrophoneIndicatorAppearance {
         switch self {
         case .muted: return .systemRed
         case .unmuted: return .systemGreen
+        case .unknown: return .systemGray
         case .hidden: return .clear
         }
     }
@@ -317,17 +322,26 @@ private final class MicrophoneMuteIndicatorPanel: NSPanel {
 }
 
 private struct HardwareMicrophoneMuteIndicatorView: View {
-    let color: Color
+    let appearance: XM6MicrophoneIndicatorAppearance
 
+    @ViewBuilder
     var body: some View {
-        Circle()
-            .fill(color)
-            .overlay {
-                Circle()
-                    .strokeBorder(.white.opacity(0.45), lineWidth: 0.5)
-            }
-            .shadow(color: .black.opacity(0.35), radius: 1.5, y: 1)
-            .frame(width: 9, height: 9)
-            .frame(width: 18, height: 18)
+        if appearance == .unknown {
+            Image(systemName: "questionmark.circle.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .shadow(color: .black.opacity(0.35), radius: 1.5, y: 1)
+                .frame(width: 18, height: 18)
+        } else {
+            Circle()
+                .fill(Color(nsColor: appearance.color))
+                .overlay {
+                    Circle()
+                        .strokeBorder(.white.opacity(0.45), lineWidth: 0.5)
+                }
+                .shadow(color: .black.opacity(0.35), radius: 1.5, y: 1)
+                .frame(width: 9, height: 9)
+                .frame(width: 18, height: 18)
+        }
     }
 }

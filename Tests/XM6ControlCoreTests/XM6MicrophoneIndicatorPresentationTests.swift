@@ -20,6 +20,9 @@ struct XM6MicrophoneIndicatorPresentationTests {
         appearance = apply(.showUnmuted, to: appearance)
         #expect(appearance == .unmuted)
 
+        appearance = apply(.showUnknown, to: appearance)
+        #expect(appearance == .unknown)
+
         appearance = apply(.hide, to: appearance)
         #expect(appearance == .hidden)
     }
@@ -27,6 +30,7 @@ struct XM6MicrophoneIndicatorPresentationTests {
     @Test func noPresentationActionPreservesCurrentAppearance() {
         #expect(apply(.none, to: .muted) == .muted)
         #expect(apply(.none, to: .unmuted) == .unmuted)
+        #expect(apply(.none, to: .unknown) == .unknown)
     }
 
     private func apply(

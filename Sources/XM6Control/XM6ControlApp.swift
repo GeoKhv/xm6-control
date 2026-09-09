@@ -41,6 +41,7 @@ struct XM6ControlApp: App {
         MenuBarExtra {
             CompactControlsView()
                 .environmentObject(controller)
+                .environmentObject(microphoneMuteIndicator)
         } label: {
             MenuBarHeadphonesIcon(indicator: microphoneMuteIndicator)
         }
@@ -50,6 +51,7 @@ struct XM6ControlApp: App {
         Window("XM6 Widget", id: "desktop-widget") {
             DesktopWidgetView()
                 .environmentObject(controller)
+                .environmentObject(microphoneMuteIndicator)
         }
         .windowResizability(.contentSize)
         .defaultPosition(.topTrailing)
@@ -78,18 +80,29 @@ private struct MenuBarHeadphonesIcon: View {
         case .hidden: color = .clear
         case .muted: color = .systemRed
         case .unmuted: color = .systemGreen
+        case .unknown: color = .systemGray
         }
 
         let artwork = ZStack(alignment: .bottomTrailing) {
             Image(systemName: "headphones.circle.fill")
                 .font(.system(size: 13))
                 .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
-            Circle()
-                .fill(Color(nsColor: color))
-                .overlay {
-                    Circle().strokeBorder(.white.opacity(0.95), lineWidth: 1)
+            if indicator.menuBarAppearance == .unknown {
+                ZStack {
+                    Circle().fill(Color(nsColor: color))
+                    Text("?")
+                        .font(.system(size: 5, weight: .bold))
+                        .foregroundStyle(.white)
                 }
                 .frame(width: 7, height: 7)
+            } else {
+                Circle()
+                    .fill(Color(nsColor: color))
+                    .overlay {
+                        Circle().strokeBorder(.white.opacity(0.95), lineWidth: 1)
+                    }
+                    .frame(width: 7, height: 7)
+            }
         }
         .frame(width: 16, height: 16)
 

@@ -59,6 +59,14 @@ struct DashboardView: View {
                         Text("Menu bar icon").tag(XM6MicrophoneIndicatorLocation.menuBarIcon)
                     }
                     .disabled(!microphoneMuteIndicator.isEnabled)
+                    if microphoneMuteIndicator.isEnabled,
+                       microphoneMuteIndicator.isMicrophoneStateUnknown {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Microphone state unknown")
+                            Text("Start a new microphone session to resync.")
+                        }
+                        .foregroundStyle(.secondary)
+                    }
                     Toggle("Debug logging (protocol.log)", isOn: $controller.protocolLoggingEnabled)
                 }
                 .toggleStyle(.checkbox)

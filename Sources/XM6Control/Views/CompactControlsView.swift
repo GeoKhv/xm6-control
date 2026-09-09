@@ -5,6 +5,7 @@ import SonyHeadphonesKit
 /// widget: every frequently-used control in a small footprint.
 struct CompactControlsView: View {
     @EnvironmentObject private var controller: HeadphonesController
+    @EnvironmentObject private var microphoneMuteIndicator: HardwareMicrophoneMuteIndicatorController
     @Environment(\.openWindow) private var openWindow
     /// Extra chrome (drag hint + close) shown only in the desktop-widget window.
     var isDesktopWidget = false
@@ -30,6 +31,17 @@ struct CompactControlsView: View {
                 }
             } else {
                 connectPrompt
+            }
+
+            if microphoneMuteIndicator.isEnabled,
+               microphoneMuteIndicator.isMicrophoneStateUnknown {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Microphone state unknown")
+                        .fontWeight(.medium)
+                    Text("Start a new microphone session to resync.")
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             }
 
             if !isDesktopWidget {

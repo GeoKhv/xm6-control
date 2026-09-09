@@ -9,6 +9,7 @@ public enum XM6MicrophoneIndicatorAppearance: Equatable, Sendable {
     case hidden
     case muted
     case unmuted
+    case unknown
 }
 
 /// Keeps presentation state independent from the inferred microphone state. Both
@@ -27,6 +28,8 @@ public enum XM6MicrophoneIndicatorPresentationStateMachine {
             return .muted
         case .showUnmuted:
             return .unmuted
+        case .showUnknown:
+            return .unknown
         }
     }
 }

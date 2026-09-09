@@ -7,7 +7,9 @@ import Foundation
 @MainActor
 public protocol XM6MicrophoneActivityProviding: AnyObject {
     var isInputActive: Bool { get }
-    var inputActivityPublisher: AnyPublisher<Bool, Never> { get }
+    /// Emits only after CoreAudio has produced a real observation. In particular,
+    /// the property's initial `false` value is not an observation of inactivity.
+    var inputActivityObservationPublisher: AnyPublisher<Bool, Never> { get }
     func start()
     func stop()
 }
@@ -23,9 +25,10 @@ public protocol XM6MicrophoneActivityProviding: AnyObject {
 @MainActor
 public final class XM6MicrophoneActivityMonitor: ObservableObject, XM6MicrophoneActivityProviding {
     @Published public private(set) var isInputActive = false
+    private let inputActivityObservationSubject = PassthroughSubject<Bool, Never>()
 
-    public var inputActivityPublisher: AnyPublisher<Bool, Never> {
-        $isInputActive.eraseToAnyPublisher()
+    public var inputActivityObservationPublisher: AnyPublisher<Bool, Never> {
+        inputActivityObservationSubject.eraseToAnyPublisher()
     }
 
     private struct DeviceDescription: Equatable {
@@ -260,6 +263,7 @@ public final class XM6MicrophoneActivityMonitor: ObservableObject, XM6Microphone
         guard !hasReportedActivity || isInputActive != active else { return }
         hasReportedActivity = true
         isInputActive = active
+        inputActivityObservationSubject.send(active)
         diagnosticHandler("CoreAudio: XM6 input \(active ? "active" : "inactive")")
     }
 

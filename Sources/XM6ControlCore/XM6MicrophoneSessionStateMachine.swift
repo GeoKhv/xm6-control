@@ -4,11 +4,12 @@ public enum XM6MicrophoneSessionState: Equatable, Sendable {
     case inactive
     case activeUnmuted
     case activeMuted
+    case activeUnknown
 }
 
 public enum XM6MicrophoneSessionEvent: Equatable, Sendable {
-    case inputBecameActive
-    case inputBecameInactive
+    case inputActivityObserved(Bool)
+    case controlConnectionChanged(isConnected: Bool)
     case buttonPressed
 }
 
@@ -18,6 +19,7 @@ public enum XM6MicrophoneIndicatorAction: Equatable, Sendable {
     case none
     case showMuted
     case showUnmuted
+    case showUnknown
     case hide
 }
 
@@ -36,42 +38,85 @@ public struct XM6MicrophoneSessionTransition: Equatable, Sendable {
 
 /// A small deterministic reducer so the microphone-session behavior can be tested
 /// without Bluetooth or CoreAudio hardware.
-public enum XM6MicrophoneSessionStateMachine {
-    public static func transition(
-        from state: XM6MicrophoneSessionState,
-        event: XM6MicrophoneSessionEvent
+public struct XM6MicrophoneSessionStateMachine: Sendable {
+    public private(set) var state: XM6MicrophoneSessionState = .inactive
+
+    /// `nil` means CoreAudio discovery has not completed. This deliberately keeps
+    /// the monitor's placeholder `false` separate from observed inactivity.
+    private var observedInputActivity: Bool?
+    private var isControlConnected = false
+
+    public init() {}
+
+    public mutating func handle(
+        _ event: XM6MicrophoneSessionEvent
     ) -> XM6MicrophoneSessionTransition {
-        switch (state, event) {
-        case (.inactive, .inputBecameActive):
-            return XM6MicrophoneSessionTransition(
-                state: .activeUnmuted,
-                indicatorAction: .none
-            )
+        let transition: XM6MicrophoneSessionTransition
 
-        case (.activeUnmuted, .buttonPressed):
-            return XM6MicrophoneSessionTransition(
-                state: .activeMuted,
-                indicatorAction: .showMuted
-            )
+        switch event {
+        case .inputActivityObserved(false):
+            observedInputActivity = false
+            transition = state == .inactive
+                ? unchanged()
+                : result(.inactive, .hide)
 
-        case (.activeMuted, .buttonPressed):
-            return XM6MicrophoneSessionTransition(
-                state: .activeUnmuted,
-                indicatorAction: .showUnmuted
-            )
+        case .inputActivityObserved(true):
+            let previousObservation = observedInputActivity
+            observedInputActivity = true
 
-        case (.activeUnmuted, .inputBecameInactive),
-             (.activeMuted, .inputBecameInactive):
-            return XM6MicrophoneSessionTransition(
-                state: .inactive,
-                indicatorAction: .hide
-            )
+            if previousObservation == true {
+                // A repeated active report is not evidence of a fresh session.
+                transition = unchanged()
+            } else if previousObservation == false, isControlConnected {
+                // We saw the preceding inactive state and the complete new start.
+                transition = result(.activeUnmuted, .none)
+            } else {
+                // The app started mid-session, or the session began without the
+                // control channel needed to observe every Sony button press.
+                transition = result(.activeUnknown, .showUnknown)
+            }
 
-        default:
-            return XM6MicrophoneSessionTransition(
-                state: state,
-                indicatorAction: .none
-            )
+        case .controlConnectionChanged(let connected):
+            let wasConnected = isControlConnected
+            isControlConnected = connected
+
+            if wasConnected, !connected, observedInputActivity == true {
+                // Button events can be lost until RFCOMM returns. Do not turn this
+                // into a synthetic input-session boundary.
+                transition = result(.activeUnknown, .showUnknown)
+            } else if !wasConnected, connected,
+                      observedInputActivity == true,
+                      state == .activeUnknown || state == .inactive {
+                // Restoring only RFCOMM cannot recreate an absolute mute baseline.
+                transition = result(.activeUnknown, .showUnknown)
+            } else {
+                transition = unchanged()
+            }
+
+        case .buttonPressed:
+            switch state {
+            case .activeUnmuted:
+                transition = result(.activeMuted, .showMuted)
+            case .activeMuted:
+                transition = result(.activeUnmuted, .showUnmuted)
+            case .inactive, .activeUnknown:
+                // Sony reports a press, not the resulting absolute mute state.
+                transition = unchanged()
+            }
         }
+
+        state = transition.state
+        return transition
+    }
+
+    private func unchanged() -> XM6MicrophoneSessionTransition {
+        result(state, .none)
+    }
+
+    private func result(
+        _ state: XM6MicrophoneSessionState,
+        _ action: XM6MicrophoneIndicatorAction
+    ) -> XM6MicrophoneSessionTransition {
+        XM6MicrophoneSessionTransition(state: state, indicatorAction: action)
     }
 }
